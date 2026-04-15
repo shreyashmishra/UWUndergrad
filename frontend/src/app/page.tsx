@@ -1,5 +1,5 @@
-import { StudentPortal } from "@/components/student-portal";
+import { PlannerApp } from "@/features/planner/components/planner-app";
 
 export default function HomePage() {
-  return <StudentPortal />;
+  return <PlannerApp />;
 }

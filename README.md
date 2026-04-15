@@ -132,6 +132,12 @@ uvicorn app.main:app --reload
 
 The GraphQL endpoint will be available at `http://localhost:8000/graphql`.
 
+Notes:
+
+- Do not separately install a newer `pydantic` version on top of `backend/requirements.txt`. The current Strawberry pin in this MVP expects `pydantic<2.11`.
+- `alembic upgrade head` and `python -m app.db.seed` require a running MySQL server reachable at the `DATABASE_URL` in your repo-root `.env`.
+- If `uvicorn` reports `Address already in use`, another process is already bound to port `8000`. Stop that process or run `uvicorn app.main:app --reload --port 8001`.
+
 ### 2. Frontend
 
 In a separate terminal:
@@ -149,6 +155,7 @@ The app will be available at `http://localhost:3000`.
 - Create a local MySQL database that matches `MYSQL_DATABASE`.
 - Ensure the MySQL user in `DATABASE_URL` can create tables and indexes.
 - If you change the schema, add a new Alembic revision rather than editing the initial migration after real usage begins.
+- If you see `Can't connect to MySQL server on 'localhost' ([Errno 61] Connection refused)`, MySQL is not running yet or `DATABASE_URL` points at the wrong host/port.
 
 ## Seed Data
 

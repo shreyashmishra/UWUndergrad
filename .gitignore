@@ -20,3 +20,5 @@ __pycache__/
 backend/alembic/versions/__pycache__/
 backend/.coverage
 backend/htmlcov/
+
+backend

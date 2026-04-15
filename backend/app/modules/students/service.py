@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db.repositories.student_repository import StudentRepository
 from app.modules.universities.common.requirement_types import CourseStatus
+from app.modules.universities.catalog_fallback import get_demo_progress_snapshot
 
 
 class StudentProgressService:
@@ -11,7 +13,10 @@ class StudentProgressService:
         self.student_repository = StudentRepository(session)
 
     def get_student_progress(self, university_code: str, program_code: str, student_external_key: str = StudentRepository.DEMO_STUDENT_KEY):
-        return self.student_repository.get_progress_snapshot(university_code, program_code, student_external_key)
+        try:
+            return self.student_repository.get_progress_snapshot(university_code, program_code, student_external_key)
+        except OperationalError:
+            return get_demo_progress_snapshot(university_code, program_code)
 
     def update_course_status(
         self,

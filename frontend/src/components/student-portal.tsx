@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 
 import { ProgressSummary } from "@/features/progress/components/progress-summary";
 import { ProgramSelector } from "@/features/programs/components/program-selector";
-import { UniversitySelector } from "@/features/programs/components/university-selector";
 import { RoadmapBoard } from "@/features/roadmap/components/roadmap-board";
 import { ProgressStorageService } from "@/features/storage/progress-storage-service";
-import { ProgramSelectionStorageService } from "@/features/storage/program-selection-storage-service";
 import {
-  fetchAvailableUniversities,
+  DEFAULT_UNIVERSITY_CODE,
+  ProgramSelectionStorageService,
+} from "@/features/storage/program-selection-storage-service";
+import {
   fetchProgramsByUniversity,
   fetchRoadmap,
   fetchStudentProgress,
@@ -21,7 +22,6 @@ import type {
   ProgramSelection,
   Roadmap,
   StudentProgress,
-  University,
 } from "@/types/roadmap";
 
 const EMPTY_PROGRESS: ProgressSnapshot = {
@@ -42,10 +42,9 @@ function toSnapshot(progress: StudentProgress): ProgressSnapshot {
 
 export function StudentPortal() {
   const [selection, setSelection] = useState<ProgramSelection>({
-    universityCode: null,
+    universityCode: DEFAULT_UNIVERSITY_CODE,
     programCode: null,
   });
-  const [universities, setUniversities] = useState<University[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [progress, setProgress] = useState<ProgressSnapshot>(EMPTY_PROGRESS);
   const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
@@ -55,48 +54,13 @@ export function StudentPortal() {
 
   useEffect(() => {
     const storedSelection = ProgramSelectionStorageService.get();
-    setSelection(storedSelection);
-
-    let cancelled = false;
-    const loadUniversities = async () => {
-      try {
-        const availableUniversities = await fetchAvailableUniversities();
-        if (cancelled) {
-          return;
-        }
-
-        setUniversities(availableUniversities);
-        const fallbackUniversityCode =
-          storedSelection.universityCode &&
-          availableUniversities.some((item) => item.code === storedSelection.universityCode)
-            ? storedSelection.universityCode
-            : availableUniversities[0]?.code ?? null;
-
-        const nextSelection = {
-          universityCode: fallbackUniversityCode,
-          programCode: storedSelection.programCode,
-        };
-        ProgramSelectionStorageService.set(nextSelection);
-        setSelection(nextSelection);
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Unable to load universities from the backend.",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
+    const nextSelection = {
+      universityCode: DEFAULT_UNIVERSITY_CODE,
+      programCode: storedSelection.programCode,
     };
-
-    void loadUniversities();
-    return () => {
-      cancelled = true;
-    };
+    ProgramSelectionStorageService.set(nextSelection);
+    setSelection(nextSelection);
+    setIsLoading(false);
   }, []);
 
   useEffect(() => {
@@ -230,18 +194,9 @@ export function StudentPortal() {
     };
   }, [progress, selection.programCode, selection.universityCode]);
 
-  const handleUniversityChange = (universityCode: string) => {
-    const nextSelection = { universityCode, programCode: null };
-    ProgramSelectionStorageService.set(nextSelection);
-    setPrograms([]);
-    setProgress(EMPTY_PROGRESS);
-    setRoadmap(null);
-    setSelection(nextSelection);
-  };
-
   const handleProgramChange = (programCode: string) => {
     const nextSelection = {
-      universityCode: selection.universityCode,
+      universityCode: DEFAULT_UNIVERSITY_CODE,
       programCode,
     };
     ProgramSelectionStorageService.set(nextSelection);
@@ -315,11 +270,17 @@ export function StudentPortal() {
 
               <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
                 <div className="space-y-4">
-                  <UniversitySelector
-                    universities={universities}
-                    selectedCode={selection.universityCode}
-                    onChange={handleUniversityChange}
-                  />
+                  <div className="rounded-[1.6rem] bg-cloud px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/55">
+                      University
+                    </p>
+                    <h2 className="mt-3 font-display text-2xl text-ink">
+                      University of Waterloo
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-ink/70">
+                      Locked for the current MVP while program and roadmap flows are refined.
+                    </p>
+                  </div>
                   <ProgramSelector
                     programs={programs}
                     selectedCode={selection.programCode}
