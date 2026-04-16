@@ -19,6 +19,8 @@ var (
 	parentheticalDegreePattern = regexp.MustCompile(`^(.*)\s+\(([^()]+)\)$`)
 	spaceCodePattern           = regexp.MustCompile(`^([A-Z]+)(\d[A-Z0-9]*)$`)
 	whitespacePattern          = regexp.MustCompile(`\s+`)
+	// Matches academic term labels like "1A Term", "2B", "Term 3A", "1A - Fall"
+	academicTermPattern = regexp.MustCompile(`(?i)\b([1-9])\s*([AB])\b`)
 )
 
 type CourseFetcher func(ctx context.Context, courseID string) (*CourseDetail, error)
@@ -84,29 +86,11 @@ func BuildProgramDefinition(
 
 	parser.preloadCourses(ctx, requirementHTML)
 
-	terms := []model.TermDefinition{
-		{
-			Code:     "OVERVIEW",
-			Label:    "Official Plan Notes",
-			Year:     1,
-			Season:   model.TermSeasonFall,
-			Sequence: 1,
-			Requirements: parser.syntheticOverviewRequirements(
-				htmlToText(detail.AdmissionRequirements),
-				htmlToText(detail.DeclarationRequirements),
-				htmlToText(detail.GraduationRequirements),
-				htmlToText(detail.DegreeRequirements),
-				htmlToText(detail.AdditionalConstraints),
-				htmlToText(detail.CoOperativeRequirementsUndergraduate),
-			),
-		},
-	}
-
 	parsedTerms, err := parser.parseRequirements(ctx, requirementHTML)
 	if err != nil {
 		return nil, err
 	}
-	terms = append(terms, parsedTerms...)
+	terms := parsedTerms
 
 	for index := range terms {
 		term := &terms[index]
@@ -173,17 +157,38 @@ func (p *parserState) parseRequirements(ctx context.Context, requirementHTML str
 		if len(requirements) == 0 {
 			continue
 		}
+		year, season, shortCode := parseAcademicTerm(label)
+		termLabel := label
+		if shortCode != "" {
+			termLabel = shortCode // use "1A", "2B", etc. as the display label
+		}
 		terms = append(terms, model.TermDefinition{
-			Code:         sanitizeCode(label, index+2),
-			Label:        label,
-			Year:         1,
-			Season:       model.TermSeasonFall,
-			Sequence:     int32(index + 2),
+			Code:         sanitizeCode(label, index+1),
+			Label:        termLabel,
+			Year:         year,
+			Season:       season,
+			Sequence:     int32(index + 1),
 			Requirements: requirements,
 		})
 	}
 
 	return terms, nil
+}
+
+// parseAcademicTerm extracts structured year/season metadata from a section label.
+// Recognises patterns like "1A Term", "2B", "Term 3A", "4B - Winter" etc.
+// Returns year=0 and an empty shortCode when the label is not a recognised academic term.
+func parseAcademicTerm(label string) (year int32, season model.TermSeason, shortCode string) {
+	matches := academicTermPattern.FindStringSubmatch(label)
+	if len(matches) < 3 {
+		return 0, model.TermSeasonFall, ""
+	}
+	y, _ := strconv.Atoi(matches[1])
+	letter := strings.ToUpper(matches[2])
+	if letter == "B" {
+		return int32(y), model.TermSeasonWinter, matches[1] + letter
+	}
+	return int32(y), model.TermSeasonFall, matches[1] + letter
 }
 
 func (p *parserState) parseRule(ctx context.Context, rule *goquery.Selection, label string) []model.TermRequirementDefinition {
@@ -309,19 +314,6 @@ func (p *parserState) syntheticRequirement(text string, sequence int32) model.Te
 	}
 }
 
-func (p *parserState) syntheticOverviewRequirements(items ...string) []model.TermRequirementDefinition {
-	result := make([]model.TermRequirementDefinition, 0)
-	sequence := int32(1)
-	for _, item := range items {
-		item = normalizeWhitespace(item)
-		if item == "" {
-			continue
-		}
-		result = append(result, p.syntheticRequirement(item, sequence))
-		sequence++
-	}
-	return result
-}
 
 func (p *parserState) loadCourse(ctx context.Context, courseID string) (*CourseDetail, error) {
 	if courseID == "" {
