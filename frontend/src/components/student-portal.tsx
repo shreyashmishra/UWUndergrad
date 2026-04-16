@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 
 import { ProgressSummary } from "@/features/progress/components/progress-summary";
 import { ProgramSelector } from "@/features/programs/components/program-selector";
+import { UniversitySelector } from "@/features/programs/components/university-selector";
 import { RoadmapBoard } from "@/features/roadmap/components/roadmap-board";
-import { ProgressStorageService } from "@/features/storage/progress-storage-service";
+import { ProgramSelectionStorageService } from "@/features/storage/program-selection-storage-service";
 import {
-  DEFAULT_UNIVERSITY_CODE,
-  ProgramSelectionStorageService,
-} from "@/features/storage/program-selection-storage-service";
-import {
+  clearElectiveSelection,
+  fetchAvailableUniversities,
   fetchProgramsByUniversity,
   fetchRoadmap,
   fetchStudentProgress,
+  selectElective,
+  updateCourseStatus,
 } from "@/lib/graphql/client";
 import type {
   CourseStatus,
@@ -22,6 +23,7 @@ import type {
   ProgramSelection,
   Roadmap,
   StudentProgress,
+  University,
 } from "@/types/roadmap";
 
 const EMPTY_PROGRESS: ProgressSnapshot = {
@@ -42,29 +44,69 @@ function toSnapshot(progress: StudentProgress): ProgressSnapshot {
 
 export function StudentPortal() {
   const [selection, setSelection] = useState<ProgramSelection>({
-    universityCode: DEFAULT_UNIVERSITY_CODE,
+    universityCode: null,
     programCode: null,
   });
+  const [universities, setUniversities] = useState<University[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [progress, setProgress] = useState<ProgressSnapshot>(EMPTY_PROGRESS);
   const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRoadmapLoading, setIsRoadmapLoading] = useState(false);
+  const [isProgressMutating, setIsProgressMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const storedSelection = ProgramSelectionStorageService.get();
-    const nextSelection = {
-      universityCode: DEFAULT_UNIVERSITY_CODE,
-      programCode: storedSelection.programCode,
+
+    const loadUniversities = async () => {
+      try {
+        const availableUniversities = await fetchAvailableUniversities();
+        if (cancelled) {
+          return;
+        }
+
+        setUniversities(availableUniversities);
+        const fallbackUniversityCode =
+          storedSelection.universityCode &&
+          availableUniversities.some(
+            (university) => university.code === storedSelection.universityCode,
+          )
+            ? storedSelection.universityCode
+            : availableUniversities[0]?.code ?? null;
+
+        const nextSelection = {
+          universityCode: fallbackUniversityCode,
+          programCode: storedSelection.programCode,
+        };
+        ProgramSelectionStorageService.set(nextSelection);
+        setSelection(nextSelection);
+        setError(null);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Unable to load universities from the backend.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
     };
-    ProgramSelectionStorageService.set(nextSelection);
-    setSelection(nextSelection);
-    setIsLoading(false);
+
+    void loadUniversities();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (!selection.universityCode) {
+      setPrograms([]);
       return;
     }
 
@@ -114,21 +156,7 @@ export function StudentPortal() {
     }
 
     let cancelled = false;
-    const scope = {
-      universityCode: selection.universityCode,
-      programCode: selection.programCode,
-    };
-
     const loadProgress = async () => {
-      const storedProgress = ProgressStorageService.get(scope);
-      if (
-        Object.keys(storedProgress.courseStatuses).length > 0 ||
-        Object.keys(storedProgress.electiveSelections).length > 0
-      ) {
-        setProgress(storedProgress);
-        return;
-      }
-
       try {
         const seededProgress = await fetchStudentProgress(
           selection.universityCode!,
@@ -137,14 +165,10 @@ export function StudentPortal() {
         if (cancelled) {
           return;
         }
-        const bootstrapped = ProgressStorageService.bootstrap(
-          scope,
-          toSnapshot(seededProgress),
-        );
-        setProgress(bootstrapped);
+        setProgress(toSnapshot(seededProgress));
       } catch {
         if (!cancelled) {
-          setProgress(storedProgress);
+          setProgress(EMPTY_PROGRESS);
         }
       }
     };
@@ -194,39 +218,69 @@ export function StudentPortal() {
     };
   }, [progress, selection.programCode, selection.universityCode]);
 
+  const handleUniversityChange = (universityCode: string) => {
+    const nextSelection = {
+      universityCode,
+      programCode: null,
+    };
+    ProgramSelectionStorageService.set(nextSelection);
+    setPrograms([]);
+    setProgress(EMPTY_PROGRESS);
+    setRoadmap(null);
+    setSelection(nextSelection);
+  };
+
   const handleProgramChange = (programCode: string) => {
     const nextSelection = {
-      universityCode: DEFAULT_UNIVERSITY_CODE,
+      universityCode: selection.universityCode,
       programCode,
     };
     ProgramSelectionStorageService.set(nextSelection);
+    setRoadmap(null);
     setProgress(EMPTY_PROGRESS);
     setSelection(nextSelection);
   };
 
-  const updateProgress = (
-    updater: (scope: { universityCode: string; programCode: string }) => ProgressSnapshot,
-  ) => {
+  const syncProgress = async (operation: () => Promise<StudentProgress>) => {
     if (!selection.universityCode || !selection.programCode) {
       return;
     }
 
-    const scope = {
-      universityCode: selection.universityCode,
-      programCode: selection.programCode,
-    };
-    setProgress(updater(scope));
+    try {
+      setIsProgressMutating(true);
+      const nextProgress = await operation();
+      setProgress(toSnapshot(nextProgress));
+      setError(null);
+    } catch (updateError) {
+      setError(
+        updateError instanceof Error
+          ? updateError.message
+          : "Unable to update roadmap progress.",
+      );
+    } finally {
+      setIsProgressMutating(false);
+    }
   };
 
   const handleCourseStatusChange = (courseCode: string, status: CourseStatus) => {
-    updateProgress((scope) =>
-      ProgressStorageService.updateCourseStatus(scope, courseCode, status),
+    void syncProgress(() =>
+      updateCourseStatus(
+        selection.universityCode!,
+        selection.programCode!,
+        courseCode,
+        status,
+      ),
     );
   };
 
   const handleElectiveSelect = (groupCode: string, courseCode: string) => {
-    updateProgress((scope) =>
-      ProgressStorageService.selectElective(scope, groupCode, courseCode),
+    void syncProgress(() =>
+      selectElective(
+        selection.universityCode!,
+        selection.programCode!,
+        groupCode,
+        courseCode,
+      ),
     );
   };
 
@@ -235,19 +289,35 @@ export function StudentPortal() {
     courseCode: string,
     status: CourseStatus,
   ) => {
-    updateProgress((scope) => {
-      ProgressStorageService.selectElective(scope, groupCode, courseCode);
-      return ProgressStorageService.updateCourseStatus(scope, courseCode, status);
+    void syncProgress(async () => {
+      await selectElective(
+        selection.universityCode!,
+        selection.programCode!,
+        groupCode,
+        courseCode,
+      );
+      return updateCourseStatus(
+        selection.universityCode!,
+        selection.programCode!,
+        courseCode,
+        status,
+      );
     });
   };
 
   const handleElectiveClear = (groupCode: string) => {
-    updateProgress((scope) =>
-      ProgressStorageService.clearElectiveSelection(scope, groupCode),
+    void syncProgress(() =>
+      clearElectiveSelection(
+        selection.universityCode!,
+        selection.programCode!,
+        groupCode,
+      ),
     );
   };
 
   const selectedProgram = programs.find((program) => program.code === selection.programCode) ?? null;
+  const selectedUniversity =
+    universities.find((university) => university.code === selection.universityCode) ?? null;
 
   return (
     <main className="min-h-screen bg-hero-gradient px-4 py-6 text-ink sm:px-6 lg:px-8">
@@ -263,7 +333,7 @@ export function StudentPortal() {
                   Degree requirement tracking that feels like a real semester plan.
                 </h1>
                 <p className="mt-4 text-sm leading-7 text-ink/70">
-                  Start in the portal, choose Waterloo Computer Science, and map completed,
+                  Start in the portal, choose a university and program, and map completed,
                   in-progress, or planned work directly onto a term-by-term roadmap.
                 </p>
               </div>
@@ -272,15 +342,20 @@ export function StudentPortal() {
                 <div className="space-y-4">
                   <div className="rounded-[1.6rem] bg-cloud px-4 py-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/55">
-                      University
+                      Catalog source
                     </p>
                     <h2 className="mt-3 font-display text-2xl text-ink">
-                      University of Waterloo
+                      {selectedUniversity?.name ?? "Loading universities"}
                     </h2>
                     <p className="mt-2 text-sm leading-6 text-ink/70">
-                      Locked for the current MVP while program and roadmap flows are refined.
+                      The Go backend now drives the active university and program list from MySQL, so the planner no longer boots into a single hardcoded roadmap.
                     </p>
                   </div>
+                  <UniversitySelector
+                    universities={universities}
+                    selectedCode={selection.universityCode}
+                    onChange={handleUniversityChange}
+                  />
                   <ProgramSelector
                     programs={programs}
                     selectedCode={selection.programCode}
@@ -317,12 +392,14 @@ export function StudentPortal() {
                     </h2>
                   </div>
                   <div className="rounded-full bg-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-teal">
-                    {isLoading || isRoadmapLoading ? "Refreshing roadmap" : "Live local progress"}
+                    {isLoading || isRoadmapLoading || isProgressMutating
+                      ? "Refreshing roadmap"
+                      : "Live MySQL-backed progress"}
                   </div>
                 </div>
                 <p className="mt-4 max-w-3xl text-sm leading-7 text-ink/70">
                   {roadmap?.description ??
-                    "Once the roadmap is loaded, the backend evaluates remaining requirements and unmet prerequisites against local progress stored in the browser."}
+                    "Once the roadmap is loaded, the Go API evaluates remaining requirements and unmet prerequisites against the MySQL-backed student snapshot."}
                 </p>
               </div>
 

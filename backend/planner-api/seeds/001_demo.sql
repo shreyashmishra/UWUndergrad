@@ -1,0 +1,1 @@
+-- Demo catalog and roadmap data are now bootstrapped automatically by the Go API on startup.

@@ -7,7 +7,9 @@ import type {
 } from "@/types/roadmap";
 
 const GRAPHQL_ENDPOINT =
-  process.env.NEXT_PUBLIC_GRAPHQL_API_URL ?? "http://localhost:8000/graphql";
+  process.env.NEXT_PUBLIC_GO_GRAPHQL_API_URL ??
+  process.env.NEXT_PUBLIC_GRAPHQL_API_URL ??
+  "http://localhost:8080/graphql";
 
 async function graphqlRequest<TData>(
   query: string,
@@ -204,4 +206,107 @@ export async function fetchStudentProgress(
   );
 
   return data.studentProgress;
+}
+
+export async function updateCourseStatus(
+  universityCode: string,
+  programCode: string,
+  courseCode: string,
+  status: string,
+): Promise<StudentProgress> {
+  const data = await graphqlRequest<{ updateCourseStatus: StudentProgress }>(
+    `
+      mutation UpdateCourseStatus($input: UpdateCourseStatusInput!) {
+        updateCourseStatus(input: $input) {
+          studentExternalKey
+          courseStatuses {
+            courseCode
+            status
+          }
+          electiveSelections {
+            groupCode
+            courseCode
+          }
+        }
+      }
+    `,
+    {
+      input: {
+        universityCode,
+        programCode,
+        courseCode,
+        status,
+      },
+    },
+  );
+
+  return data.updateCourseStatus;
+}
+
+export async function selectElective(
+  universityCode: string,
+  programCode: string,
+  groupCode: string,
+  courseCode: string,
+): Promise<StudentProgress> {
+  const data = await graphqlRequest<{ selectElective: StudentProgress }>(
+    `
+      mutation SelectElective($input: SelectElectiveInput!) {
+        selectElective(input: $input) {
+          studentExternalKey
+          courseStatuses {
+            courseCode
+            status
+          }
+          electiveSelections {
+            groupCode
+            courseCode
+          }
+        }
+      }
+    `,
+    {
+      input: {
+        universityCode,
+        programCode,
+        groupCode,
+        courseCode,
+      },
+    },
+  );
+
+  return data.selectElective;
+}
+
+export async function clearElectiveSelection(
+  universityCode: string,
+  programCode: string,
+  groupCode: string,
+): Promise<StudentProgress> {
+  const data = await graphqlRequest<{ clearElectiveSelection: StudentProgress }>(
+    `
+      mutation ClearElectiveSelection($input: ClearElectiveSelectionInput!) {
+        clearElectiveSelection(input: $input) {
+          studentExternalKey
+          courseStatuses {
+            courseCode
+            status
+          }
+          electiveSelections {
+            groupCode
+            courseCode
+          }
+        }
+      }
+    `,
+    {
+      input: {
+        universityCode,
+        programCode,
+        groupCode,
+      },
+    },
+  );
+
+  return data.clearElectiveSelection;
 }

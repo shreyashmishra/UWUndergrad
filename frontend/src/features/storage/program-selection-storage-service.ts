@@ -2,10 +2,9 @@ import { readStorageValue, writeStorageValue } from "@/lib/storage/local-storage
 import type { ProgramSelection } from "@/types/roadmap";
 
 const PROGRAM_SELECTION_KEY = "planahead.program-selection.v1";
-export const DEFAULT_UNIVERSITY_CODE = "WATERLOO";
 
 const EMPTY_SELECTION: ProgramSelection = {
-  universityCode: DEFAULT_UNIVERSITY_CODE,
+  universityCode: null,
   programCode: null,
 };
 

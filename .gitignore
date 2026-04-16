@@ -9,16 +9,3 @@ frontend/.env.local
 node_modules/
 frontend/.next/
 frontend/out/
-
-.venv/
-venv/
-__pycache__/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-backend/alembic/versions/__pycache__/
-backend/.coverage
-backend/htmlcov/
-
-backend
