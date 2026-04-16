@@ -15,6 +15,7 @@ import (
 	"planahead/planner-api/internal/graph"
 	"planahead/planner-api/internal/repository"
 	"planahead/planner-api/internal/service"
+	"planahead/planner-api/internal/waterloo"
 )
 
 func main() {
@@ -26,11 +27,15 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	if err := db.BootstrapMySQL(context.Background(), sqlDB, cfg.MockUserID); err != nil {
+	if err := db.BootstrapMySQL(context.Background(), sqlDB); err != nil {
 		log.Fatalf("bootstrap mysql: %v", err)
 	}
 
-	catalogRepository := repository.NewCatalogRepository(sqlDB)
+	waterlooClient := waterloo.NewClient()
+	catalogRepository := repository.NewCatalogRepository(sqlDB, waterlooClient)
+	if err := catalogRepository.SyncWaterlooPrograms(context.Background()); err != nil {
+		log.Fatalf("sync waterloo programs: %v", err)
+	}
 	studentRepository := repository.NewStudentRepository(sqlDB)
 	programService := service.NewProgramService(catalogRepository, studentRepository, cfg.MockUserID)
 	studentService := service.NewStudentService(studentRepository, cfg.MockUserID)

@@ -1,0 +1,49 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: planahead-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: degree_tracker
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/planner-api/Dockerfile
+    container_name: planahead-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PLANAHEAD_PORT: "8000"
+      PLANAHEAD_ALLOWED_ORIGIN: "http://localhost:3000"
+      PLANAHEAD_DB_DRIVER: "mysql"
+      PLANAHEAD_DB_DSN: "root@tcp(mysql:3306)/degree_tracker?parseTime=true"
+      PLANAHEAD_MOCK_USER_ID: "local-demo-user"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_GRAPHQL_API_URL: "http://localhost:8000/graphql"
+    container_name: planahead-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  mysql-data:

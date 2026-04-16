@@ -1,20 +1,19 @@
 # PlanAhead Go API
 
-Go GraphQL backend for the PlanAhead roadmap app.
+Go GraphQL backend for the Waterloo roadmap planner.
 
-## Uses
+## Responsibilities
+
+- exposes the GraphQL API on `http://localhost:8000/graphql`
+- syncs the official University of Waterloo undergraduate major list
+- expands a selected Waterloo program into roadmap sections and required courses
+- stores course progress and elective selections in local MySQL
+
+## Stack
 
 - `chi` for HTTP routing
 - `graph-gophers/graphql-go` for schema-first GraphQL
 - `database/sql` with MySQL
-
-## Features
-
-- lists available universities
-- lists programs by university
-- evaluates a roadmap by program
-- stores course progress and elective selections
-- seeds demo Waterloo catalog data into MySQL on startup
 
 ## Local run
 
@@ -24,8 +23,17 @@ cd backend/planner-api
 go run ./cmd/server
 ```
 
-Defaults:
+## Defaults
 
-- port: `8080`
+- port: `8000`
 - DSN: `root@tcp(127.0.0.1:3306)/degree_tracker?parseTime=true`
-- demo student key: `local-demo-user`
+- allowed origin: `http://localhost:3000`
+- mock user key: `local-demo-user`
+
+## Docker
+
+From the repo root:
+
+```bash
+docker compose up --build backend
+```

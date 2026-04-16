@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 
 import { ProgressSummary } from "@/features/progress/components/progress-summary";
 import { ProgramSelector } from "@/features/programs/components/program-selector";
-import { UniversitySelector } from "@/features/programs/components/university-selector";
 import { RoadmapBoard } from "@/features/roadmap/components/roadmap-board";
-import { ProgramSelectionStorageService } from "@/features/storage/program-selection-storage-service";
+import {
+  ProgramSelectionStorageService,
+  WATERLOO_UNIVERSITY_CODE,
+} from "@/features/storage/program-selection-storage-service";
 import {
   clearElectiveSelection,
-  fetchAvailableUniversities,
   fetchProgramsByUniversity,
   fetchRoadmap,
   fetchStudentProgress,
@@ -23,7 +24,6 @@ import type {
   ProgramSelection,
   Roadmap,
   StudentProgress,
-  University,
 } from "@/types/roadmap";
 
 const EMPTY_PROGRESS: ProgressSnapshot = {
@@ -44,64 +44,27 @@ function toSnapshot(progress: StudentProgress): ProgressSnapshot {
 
 export function StudentPortal() {
   const [selection, setSelection] = useState<ProgramSelection>({
-    universityCode: null,
+    universityCode: WATERLOO_UNIVERSITY_CODE,
     programCode: null,
   });
-  const [universities, setUniversities] = useState<University[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [progress, setProgress] = useState<ProgressSnapshot>(EMPTY_PROGRESS);
   const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProgramsLoading, setIsProgramsLoading] = useState(true);
   const [isRoadmapLoading, setIsRoadmapLoading] = useState(false);
   const [isProgressMutating, setIsProgressMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
     const storedSelection = ProgramSelectionStorageService.get();
-
-    const loadUniversities = async () => {
-      try {
-        const availableUniversities = await fetchAvailableUniversities();
-        if (cancelled) {
-          return;
-        }
-
-        setUniversities(availableUniversities);
-        const fallbackUniversityCode =
-          storedSelection.universityCode &&
-          availableUniversities.some(
-            (university) => university.code === storedSelection.universityCode,
-          )
-            ? storedSelection.universityCode
-            : availableUniversities[0]?.code ?? null;
-
-        const nextSelection = {
-          universityCode: fallbackUniversityCode,
-          programCode: storedSelection.programCode,
-        };
-        ProgramSelectionStorageService.set(nextSelection);
-        setSelection(nextSelection);
-        setError(null);
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Unable to load universities from the backend.",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
+    const nextSelection = {
+      universityCode: WATERLOO_UNIVERSITY_CODE,
+      programCode: storedSelection.programCode,
     };
-
-    void loadUniversities();
-    return () => {
-      cancelled = true;
-    };
+    ProgramSelectionStorageService.set(nextSelection);
+    setSelection(nextSelection);
+    setIsLoading(false);
   }, []);
 
   useEffect(() => {
@@ -113,10 +76,9 @@ export function StudentPortal() {
     let cancelled = false;
     const loadPrograms = async () => {
       try {
+        setIsProgramsLoading(true);
         const universityPrograms = await fetchProgramsByUniversity(selection.universityCode!);
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         setPrograms(universityPrograms);
         const fallbackProgramCode =
@@ -139,13 +101,13 @@ export function StudentPortal() {
               : "Unable to load programs from the backend.",
           );
         }
+      } finally {
+        if (!cancelled) setIsProgramsLoading(false);
       }
     };
 
     void loadPrograms();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [selection.universityCode]);
 
   useEffect(() => {
@@ -162,27 +124,19 @@ export function StudentPortal() {
           selection.universityCode!,
           selection.programCode!,
         );
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
         setProgress(toSnapshot(seededProgress));
       } catch {
-        if (!cancelled) {
-          setProgress(EMPTY_PROGRESS);
-        }
+        if (!cancelled) setProgress(EMPTY_PROGRESS);
       }
     };
 
     void loadProgress();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [selection.programCode, selection.universityCode]);
 
   useEffect(() => {
-    if (!selection.universityCode || !selection.programCode) {
-      return;
-    }
+    if (!selection.universityCode || !selection.programCode) return;
 
     let cancelled = false;
     const loadRoadmap = async () => {
@@ -206,35 +160,16 @@ export function StudentPortal() {
           );
         }
       } finally {
-        if (!cancelled) {
-          setIsRoadmapLoading(false);
-        }
+        if (!cancelled) setIsRoadmapLoading(false);
       }
     };
 
     void loadRoadmap();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [progress, selection.programCode, selection.universityCode]);
 
-  const handleUniversityChange = (universityCode: string) => {
-    const nextSelection = {
-      universityCode,
-      programCode: null,
-    };
-    ProgramSelectionStorageService.set(nextSelection);
-    setPrograms([]);
-    setProgress(EMPTY_PROGRESS);
-    setRoadmap(null);
-    setSelection(nextSelection);
-  };
-
   const handleProgramChange = (programCode: string) => {
-    const nextSelection = {
-      universityCode: selection.universityCode,
-      programCode,
-    };
+    const nextSelection = { universityCode: WATERLOO_UNIVERSITY_CODE, programCode };
     ProgramSelectionStorageService.set(nextSelection);
     setRoadmap(null);
     setProgress(EMPTY_PROGRESS);
@@ -242,10 +177,7 @@ export function StudentPortal() {
   };
 
   const syncProgress = async (operation: () => Promise<StudentProgress>) => {
-    if (!selection.universityCode || !selection.programCode) {
-      return;
-    }
-
+    if (!selection.universityCode || !selection.programCode) return;
     try {
       setIsProgressMutating(true);
       const nextProgress = await operation();
@@ -264,23 +196,13 @@ export function StudentPortal() {
 
   const handleCourseStatusChange = (courseCode: string, status: CourseStatus) => {
     void syncProgress(() =>
-      updateCourseStatus(
-        selection.universityCode!,
-        selection.programCode!,
-        courseCode,
-        status,
-      ),
+      updateCourseStatus(selection.universityCode!, selection.programCode!, courseCode, status),
     );
   };
 
   const handleElectiveSelect = (groupCode: string, courseCode: string) => {
     void syncProgress(() =>
-      selectElective(
-        selection.universityCode!,
-        selection.programCode!,
-        groupCode,
-        courseCode,
-      ),
+      selectElective(selection.universityCode!, selection.programCode!, groupCode, courseCode),
     );
   };
 
@@ -290,124 +212,141 @@ export function StudentPortal() {
     status: CourseStatus,
   ) => {
     void syncProgress(async () => {
-      await selectElective(
-        selection.universityCode!,
-        selection.programCode!,
-        groupCode,
-        courseCode,
-      );
-      return updateCourseStatus(
-        selection.universityCode!,
-        selection.programCode!,
-        courseCode,
-        status,
-      );
+      await selectElective(selection.universityCode!, selection.programCode!, groupCode, courseCode);
+      return updateCourseStatus(selection.universityCode!, selection.programCode!, courseCode, status);
     });
   };
 
   const handleElectiveClear = (groupCode: string) => {
     void syncProgress(() =>
-      clearElectiveSelection(
-        selection.universityCode!,
-        selection.programCode!,
-        groupCode,
-      ),
+      clearElectiveSelection(selection.universityCode!, selection.programCode!, groupCode),
     );
   };
 
-  const selectedProgram = programs.find((program) => program.code === selection.programCode) ?? null;
-  const selectedUniversity =
-    universities.find((university) => university.code === selection.universityCode) ?? null;
+  const selectedProgram = programs.find((p) => p.code === selection.programCode) ?? null;
+  const isBusy = isLoading || isRoadmapLoading || isProgressMutating;
 
   return (
     <main className="min-h-screen bg-hero-gradient px-4 py-6 text-ink sm:px-6 lg:px-8">
       <div className="mx-auto max-w-[1500px]">
-        <section className="rounded-[2.4rem] border border-white/60 bg-white/55 p-6 shadow-panel backdrop-blur sm:p-8">
-          <div className="grid gap-6 xl:grid-cols-[360px,minmax(0,1fr)]">
-            <aside className="space-y-5">
+
+        {/* Top header bar */}
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path
+                  d="M2 14L9 4l7 10H2z"
+                  fill="white"
+                  fillOpacity="0.9"
+                />
+              </svg>
+            </div>
+            <span className="font-display text-xl text-ink">PlanAhead</span>
+          </div>
+          <div
+            className={`rounded-full px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] transition ${
+              isProgramsLoading
+                ? "bg-sand text-amber"
+                : isBusy
+                  ? "bg-mint text-teal"
+                  : "bg-ink/8 text-ink/60"
+            }`}
+          >
+            {isProgramsLoading
+              ? "Loading catalog"
+              : isBusy
+                ? "Refreshing"
+                : "University of Waterloo"}
+          </div>
+        </div>
+
+        <section className="rounded-[2.4rem] border border-white/60 bg-white/55 p-5 shadow-panel backdrop-blur sm:p-6">
+          <div className="grid gap-5 xl:grid-cols-[320px,minmax(0,1fr)]">
+
+            {/* Sidebar */}
+            <aside className="space-y-4">
+
+              {/* Program selector */}
               <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
-                <span className="rounded-full bg-ink px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-white">
-                  PlanAhead MVP
-                </span>
-                <h1 className="mt-4 font-display text-4xl leading-tight text-ink">
-                  Degree requirement tracking that feels like a real semester plan.
+                <h1 className="mb-1 font-display text-2xl leading-tight text-ink">
+                  Plan your degree
                 </h1>
-                <p className="mt-4 text-sm leading-7 text-ink/70">
-                  Start in the portal, choose a university and program, and map completed,
-                  in-progress, or planned work directly onto a term-by-term roadmap.
+                <p className="mb-5 text-sm leading-6 text-ink/60">
+                  Choose your Waterloo program and track your progress from 1A to graduation.
                 </p>
+                <ProgramSelector
+                  programs={programs}
+                  selectedCode={selection.programCode}
+                  onChange={handleProgramChange}
+                  disabled={isProgramsLoading || programs.length === 0}
+                  loading={isProgramsLoading}
+                />
               </div>
 
-              <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
-                <div className="space-y-4">
-                  <div className="rounded-[1.6rem] bg-cloud px-4 py-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/55">
-                      Catalog source
-                    </p>
-                    <h2 className="mt-3 font-display text-2xl text-ink">
-                      {selectedUniversity?.name ?? "Loading universities"}
-                    </h2>
-                    <p className="mt-2 text-sm leading-6 text-ink/70">
-                      The Go backend now drives the active university and program list from MySQL, so the planner no longer boots into a single hardcoded roadmap.
-                    </p>
-                  </div>
-                  <UniversitySelector
-                    universities={universities}
-                    selectedCode={selection.universityCode}
-                    onChange={handleUniversityChange}
-                  />
-                  <ProgramSelector
-                    programs={programs}
-                    selectedCode={selection.programCode}
-                    onChange={handleProgramChange}
-                  />
-                </div>
-
-                <div className="mt-5 rounded-[1.6rem] bg-cloud px-4 py-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/55">
+              {/* Active program info */}
+              {(selectedProgram || isProgramsLoading) && (
+                <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/50">
                     Active plan
                   </p>
-                  <h2 className="mt-3 font-display text-2xl text-ink">
-                    {selectedProgram?.name ?? "Select a program"}
+                  <h2 className="mt-2 font-display text-2xl leading-tight text-ink">
+                    {selectedProgram
+                      ? `${selectedProgram.code} – ${selectedProgram.name}`
+                      : "Loading…"}
                   </h2>
-                  <p className="mt-2 text-sm leading-6 text-ink/70">
-                    {selectedProgram?.degree ??
-                      "Program details appear here once a selection is made."}
-                  </p>
+                  {selectedProgram?.degree && (
+                    <p className="mt-1.5 text-sm text-ink/60">{selectedProgram.degree}</p>
+                  )}
+                  {selectedProgram?.description && (
+                    <p className="mt-3 text-sm leading-6 text-ink/55">
+                      {selectedProgram.description}
+                    </p>
+                  )}
                 </div>
-              </div>
+              )}
 
+              {/* Progress summary */}
               <ProgressSummary summary={roadmap?.summary ?? null} />
             </aside>
 
-            <section className="space-y-5">
-              <div className="rounded-[2rem] border border-white/70 bg-white/80 p-6 shadow-panel backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-4">
+            {/* Main roadmap area */}
+            <section className="space-y-4">
+              {/* Roadmap header */}
+              <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/50">
-                      Dashboard
+                      Roadmap
                     </p>
-                    <h2 className="mt-2 font-display text-3xl text-ink">
-                      {roadmap?.programName ?? "Roadmap loading"}
+                    <h2 className="mt-1.5 font-display text-2xl text-ink">
+                      {roadmap?.programName ??
+                        (isProgramsLoading
+                          ? "Loading programs…"
+                          : "Select a program to begin")}
                     </h2>
                   </div>
-                  <div className="rounded-full bg-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-teal">
-                    {isLoading || isRoadmapLoading || isProgressMutating
-                      ? "Refreshing roadmap"
-                      : "Live MySQL-backed progress"}
-                  </div>
+                  {roadmap && (
+                    <div className="flex items-center gap-2 rounded-2xl bg-cloud px-4 py-2">
+                      <div className="h-2 w-2 rounded-full bg-teal" />
+                      <span className="text-xs font-semibold text-teal">
+                        {roadmap.summary.completionPercentage}% complete
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <p className="mt-4 max-w-3xl text-sm leading-7 text-ink/70">
-                  {roadmap?.description ??
-                    "Once the roadmap is loaded, the Go API evaluates remaining requirements and unmet prerequisites against the MySQL-backed student snapshot."}
-                </p>
+                {roadmap?.description && (
+                  <p className="mt-3 max-w-3xl text-sm leading-6 text-ink/60">
+                    {roadmap.description}
+                  </p>
+                )}
               </div>
 
-              {error ? (
+              {error && (
                 <div className="rounded-[1.6rem] border border-rose/25 bg-rose/10 px-5 py-4 text-sm text-rose">
                   {error}
                 </div>
-              ) : null}
+              )}
 
               <RoadmapBoard
                 roadmap={roadmap}

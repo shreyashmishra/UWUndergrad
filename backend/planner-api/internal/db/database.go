@@ -17,6 +17,13 @@ func Open(driver string, dsn string) (*sql.DB, error) {
 	db.SetMaxIdleConns(5)
 	db.SetMaxOpenConns(10)
 
+	for attempt := 0; attempt < 30; attempt++ {
+		if err := db.Ping(); err == nil {
+			return db, nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}

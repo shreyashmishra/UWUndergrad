@@ -5,16 +5,130 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"planahead/planner-api/internal/model"
+	"planahead/planner-api/internal/waterloo"
 )
 
 type CatalogRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	client *waterloo.Client
+	cache  repositoryCache
 }
 
-func NewCatalogRepository(db *sql.DB) *CatalogRepository {
-	return &CatalogRepository{db: db}
+type repositoryCache struct {
+	mu              sync.RWMutex
+	catalogID       string
+	catalogFetched  time.Time
+	programs        map[string]cachedProgramDefinition
+}
+
+type cachedProgramDefinition struct {
+	definition *model.ProgramDefinition
+	fetchedAt  time.Time
+}
+
+const (
+	catalogCacheTTL = 12 * time.Hour
+	programCacheTTL = 12 * time.Hour
+)
+
+func NewCatalogRepository(db *sql.DB, client *waterloo.Client) *CatalogRepository {
+	return &CatalogRepository{
+		db:     db,
+		client: client,
+		cache: repositoryCache{
+			programs: map[string]cachedProgramDefinition{},
+		},
+	}
+}
+
+func (r *CatalogRepository) SyncWaterlooPrograms(ctx context.Context) error {
+	catalogID, err := r.currentCatalogID(ctx)
+	if err != nil {
+		return err
+	}
+
+	if _, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO universities (code, name)
+		VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+		waterloo.UniversityCode,
+		waterloo.UniversityName,
+	); err != nil {
+		return err
+	}
+
+	var universityID int64
+	if err := r.db.QueryRowContext(
+		ctx,
+		`SELECT id FROM universities WHERE code = ?`,
+		waterloo.UniversityCode,
+	).Scan(&universityID); err != nil {
+		return err
+	}
+
+	items, err := r.client.ListPrograms(ctx, catalogID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	currentProgramCodes := make([]string, 0)
+	for _, item := range items {
+		if !strings.EqualFold(item.UndergraduateCredential.Name, "Major") {
+			continue
+		}
+
+		summary := waterloo.ToProgramSummary(item)
+		currentProgramCodes = append(currentProgramCodes, summary.Code)
+
+		if _, err := r.db.ExecContext(
+			ctx,
+			`INSERT INTO programs (university_id, code, name, degree, description)
+			VALUES (?, ?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				name = VALUES(name),
+				degree = VALUES(degree),
+				description = VALUES(description)`,
+			universityID,
+			summary.Code,
+			summary.Name,
+			summary.Degree,
+			summary.Description,
+		); err != nil {
+			return err
+		}
+	}
+
+	if len(currentProgramCodes) == 0 {
+		return fmt.Errorf("waterloo sync returned zero major programs at %s", now.Format(time.RFC3339))
+	}
+
+	placeholders := strings.Repeat("?,", len(currentProgramCodes))
+	placeholders = strings.TrimSuffix(placeholders, ",")
+
+	args := make([]any, 0, len(currentProgramCodes)+1)
+	args = append(args, universityID)
+	for _, code := range currentProgramCodes {
+		args = append(args, code)
+	}
+
+	query := fmt.Sprintf(
+		`DELETE FROM programs
+		WHERE university_id = ?
+		AND code NOT IN (%s)`,
+		placeholders,
+	)
+	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *CatalogRepository) ListUniversities(ctx context.Context) ([]model.University, error) {
@@ -64,281 +178,162 @@ func (r *CatalogRepository) ListProgramsByUniversity(ctx context.Context, univer
 }
 
 func (r *CatalogRepository) GetProgramDefinition(ctx context.Context, universityCode string, programCode string) (*model.ProgramDefinition, error) {
-	type programRow struct {
-		ProgramID      int64
-		TemplateID     int64
-		UniversityCode string
-		ProgramCode    string
-		Name           string
-		Degree         string
-		Description    string
+	cacheKey := universityCode + ":" + programCode
+	if cached := r.cachedProgram(cacheKey); cached != nil {
+		return cached, nil
 	}
 
-	var program programRow
-	if err := r.db.QueryRowContext(
+	var summary model.ProgramSummary
+	err := r.db.QueryRowContext(
 		ctx,
-		`SELECT p.id, ppt.id, u.code, p.code, p.name, p.degree, p.description
+		`SELECT p.code, p.name, p.degree, p.description, u.code
 		FROM programs p
 		INNER JOIN universities u ON u.id = p.university_id
-		INNER JOIN program_plan_templates ppt ON ppt.program_id = p.id
 		WHERE u.code = ? AND p.code = ?`,
 		universityCode,
 		programCode,
-	).Scan(&program.ProgramID, &program.TemplateID, &program.UniversityCode, &program.ProgramCode, &program.Name, &program.Degree, &program.Description); err != nil {
+	).Scan(&summary.Code, &summary.Name, &summary.Degree, &summary.Description, &summary.UniversityCode)
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("program %s/%s not found", universityCode, programCode)
 		}
 		return nil, err
 	}
 
-	terms, termIDByCode, err := r.loadTerms(ctx, program.TemplateID)
+	catalogID, err := r.currentCatalogID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	requirementsByTerm, err := r.loadCourseRequirements(ctx, program.ProgramID)
+	detail, err := r.client.Program(ctx, catalogID, programCode)
 	if err != nil {
 		return nil, err
 	}
 
-	groupsByTerm, err := r.loadGroupRequirements(ctx, program.ProgramID, termIDByCode)
-	if err != nil {
-		return nil, err
-	}
-
-	for termIndex := range terms {
-		termCode := terms[termIndex].Code
-		termRequirements := append(requirementsByTerm[termCode], groupsByTerm[termCode]...)
-		sort.SliceStable(termRequirements, func(i int, j int) bool {
-			return termRequirements[i].Sequence < termRequirements[j].Sequence
-		})
-		terms[termIndex].Requirements = termRequirements
-	}
-
-	return &model.ProgramDefinition{
-		UniversityCode: program.UniversityCode,
-		ProgramCode:    program.ProgramCode,
-		Name:           program.Name,
-		Degree:         program.Degree,
-		Description:    program.Description,
-		Terms:          terms,
-	}, nil
-}
-
-func (r *CatalogRepository) loadTerms(ctx context.Context, templateID int64) ([]model.TermDefinition, map[int64]string, error) {
-	rows, err := r.db.QueryContext(
+	program, err := waterloo.BuildProgramDefinition(
 		ctx,
-		`SELECT id, code, label, year, season, sequence
-		FROM terms
-		WHERE program_plan_template_id = ?
-		ORDER BY sequence ASC`,
-		templateID,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-
-	terms := make([]model.TermDefinition, 0)
-	termIDByCode := map[int64]string{}
-	for rows.Next() {
-		var termID int64
-		var term model.TermDefinition
-		if err := rows.Scan(&termID, &term.Code, &term.Label, &term.Year, &term.Season, &term.Sequence); err != nil {
-			return nil, nil, err
-		}
-		terms = append(terms, term)
-		termIDByCode[termID] = term.Code
-	}
-
-	return terms, termIDByCode, rows.Err()
-}
-
-func (r *CatalogRepository) loadCourseRequirements(ctx context.Context, programID int64) (map[string][]model.TermRequirementDefinition, error) {
-	rows, err := r.db.QueryContext(
-		ctx,
-		`SELECT t.code, pr.sequence, pr.display_title, pr.notes, c.code, c.title, c.credits, c.description, c.subject
-		FROM program_requirements pr
-		INNER JOIN terms t ON t.id = pr.term_id
-		INNER JOIN courses c ON c.id = pr.course_id
-		WHERE pr.program_id = ? AND pr.requirement_group_id IS NULL
-		ORDER BY t.sequence ASC, pr.sequence ASC`,
-		programID,
+		summary,
+		detail,
+		func(ctx context.Context, courseID string) (*waterloo.CourseDetail, error) {
+			return r.client.CourseByID(ctx, catalogID, courseID)
+		},
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	prerequisitesByCourse, err := r.loadPrerequisites(ctx)
-	if err != nil {
+	if err := r.upsertCourses(ctx, detail, program.Terms); err != nil {
 		return nil, err
 	}
 
-	result := map[string][]model.TermRequirementDefinition{}
-	for rows.Next() {
-		var termCode string
-		var sequence int32
-		var displayTitle sql.NullString
-		var notes sql.NullString
-		var courseCode string
-		var title string
-		var credits float64
-		var description sql.NullString
-		var subject sql.NullString
-
-		if err := rows.Scan(&termCode, &sequence, &displayTitle, &notes, &courseCode, &title, &credits, &description, &subject); err != nil {
-			return nil, err
-		}
-
-		courseReq := model.CourseRequirementDefinition{
-			Code:          nullStringOr(displayTitle, courseCode),
-			Sequence:      sequence,
-			Notes:         nullableString(notes),
-			Prerequisites: prerequisitesByCourse[courseCode],
-			Kind:          model.RequirementKindCourse,
-			Course: model.CourseDefinition{
-				Code:        courseCode,
-				Title:       title,
-				Credits:     credits,
-				Description: nullableString(description),
-				Subject:     nullableString(subject),
-			},
-		}
-		result[termCode] = append(result[termCode], model.TermRequirementDefinition{
-			Kind:     model.RequirementKindCourse,
-			Sequence: sequence,
-			Course:   &courseReq,
-		})
-	}
-
-	return result, rows.Err()
+	r.storeProgram(cacheKey, program)
+	return program, nil
 }
 
-func (r *CatalogRepository) loadGroupRequirements(ctx context.Context, programID int64, termIDByCode map[int64]string) (map[string][]model.TermRequirementDefinition, error) {
-	rows, err := r.db.QueryContext(
+func (r *CatalogRepository) upsertCourses(ctx context.Context, _ *waterloo.ProgramDetail, terms []model.TermDefinition) error {
+	var universityID int64
+	if err := r.db.QueryRowContext(
 		ctx,
-		`SELECT rg.id, rg.term_id, rg.code, rg.title, rg.description, rg.kind, rg.sequence, rg.min_selections, rg.max_selections, eg.selection_label
-		FROM requirement_groups rg
-		INNER JOIN elective_groups eg ON eg.requirement_group_id = rg.id
-		WHERE rg.program_id = ?
-		ORDER BY rg.sequence ASC`,
-		programID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	prerequisitesByCourse, err := r.loadPrerequisites(ctx)
-	if err != nil {
-		return nil, err
+		`SELECT id FROM universities WHERE code = ?`,
+		waterloo.UniversityCode,
+	).Scan(&universityID); err != nil {
+		return err
 	}
 
-	result := map[string][]model.TermRequirementDefinition{}
-	for rows.Next() {
-		var groupID int64
-		var termID int64
-		var group model.ElectiveGroupDefinition
-		var selectionLabel sql.NullString
-		if err := rows.Scan(&groupID, &termID, &group.Code, &group.Title, &group.Description, &group.Kind, &group.Sequence, &group.MinSelections, &group.MaxSelections, &selectionLabel); err != nil {
-			return nil, err
+	seen := map[string]model.CourseDefinition{}
+	for _, term := range terms {
+		for _, requirement := range term.Requirements {
+			if requirement.Course != nil && !strings.HasPrefix(requirement.Course.Course.Code, "RULE-") {
+				seen[requirement.Course.Course.Code] = requirement.Course.Course
+			}
+			if requirement.Group == nil {
+				continue
+			}
+			for _, option := range requirement.Group.Options {
+				seen[option.Course.Code] = option.Course
+			}
 		}
-		group.Notes = nullableString(selectionLabel)
-
-		options, err := r.loadGroupOptions(ctx, groupID, prerequisitesByCourse)
-		if err != nil {
-			return nil, err
-		}
-		group.Options = options
-
-		termCode := termIDByCode[termID]
-		result[termCode] = append(result[termCode], model.TermRequirementDefinition{
-			Kind:     model.RequirementKindElectiveGroup,
-			Sequence: group.Sequence,
-			Group:    &group,
-		})
 	}
 
-	return result, rows.Err()
+	codes := make([]string, 0, len(seen))
+	for code := range seen {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+
+	for _, code := range codes {
+		course := seen[code]
+		subject := ""
+		if course.Subject != nil {
+			subject = *course.Subject
+		}
+		var description any
+		if course.Description != nil {
+			description = *course.Description
+		}
+
+		if _, err := r.db.ExecContext(
+			ctx,
+			`INSERT INTO courses (university_id, code, title, subject, credits, description)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				title = VALUES(title),
+				subject = VALUES(subject),
+				credits = VALUES(credits),
+				description = VALUES(description)`,
+			universityID,
+			course.Code,
+			course.Title,
+			subject,
+			course.Credits,
+			description,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func (r *CatalogRepository) loadGroupOptions(ctx context.Context, groupID int64, prerequisitesByCourse map[string][]model.PrerequisiteDefinition) ([]model.CourseRequirementDefinition, error) {
-	rows, err := r.db.QueryContext(
-		ctx,
-		`SELECT pr.sequence, pr.display_title, pr.notes, c.code, c.title, c.credits, c.description, c.subject
-		FROM program_requirements pr
-		INNER JOIN courses c ON c.id = pr.course_id
-		WHERE pr.requirement_group_id = ?
-		ORDER BY pr.sequence ASC`,
-		groupID,
-	)
+func (r *CatalogRepository) currentCatalogID(ctx context.Context) (string, error) {
+	r.cache.mu.RLock()
+	if r.cache.catalogID != "" && time.Since(r.cache.catalogFetched) < catalogCacheTTL {
+		catalogID := r.cache.catalogID
+		r.cache.mu.RUnlock()
+		return catalogID, nil
+	}
+	r.cache.mu.RUnlock()
+
+	catalog, err := r.client.CurrentCatalog(ctx)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make([]model.CourseRequirementDefinition, 0)
-	for rows.Next() {
-		var option model.CourseRequirementDefinition
-		var displayTitle sql.NullString
-		var notes sql.NullString
-		var description sql.NullString
-		var subject sql.NullString
-		if err := rows.Scan(&option.Sequence, &displayTitle, &notes, &option.Course.Code, &option.Course.Title, &option.Course.Credits, &description, &subject); err != nil {
-			return nil, err
-		}
-		option.Code = nullStringOr(displayTitle, option.Course.Code)
-		option.Notes = nullableString(notes)
-		option.Kind = model.RequirementKindElectiveGroup
-		option.Course.Description = nullableString(description)
-		option.Course.Subject = nullableString(subject)
-		option.Prerequisites = prerequisitesByCourse[option.Course.Code]
-		result = append(result, option)
+		return "", err
 	}
 
-	return result, rows.Err()
+	r.cache.mu.Lock()
+	r.cache.catalogID = catalog.ID
+	r.cache.catalogFetched = time.Now().UTC()
+	r.cache.mu.Unlock()
+
+	return catalog.ID, nil
 }
 
-func (r *CatalogRepository) loadPrerequisites(ctx context.Context) (map[string][]model.PrerequisiteDefinition, error) {
-	rows, err := r.db.QueryContext(
-		ctx,
-		`SELECT c.code, p.code, pr.minimum_grade, pr.is_corequisite
-		FROM prerequisite_rules pr
-		INNER JOIN courses c ON c.id = pr.course_id
-		INNER JOIN courses p ON p.id = pr.prerequisite_course_id`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+func (r *CatalogRepository) cachedProgram(cacheKey string) *model.ProgramDefinition {
+	r.cache.mu.RLock()
+	cached, exists := r.cache.programs[cacheKey]
+	r.cache.mu.RUnlock()
 
-	result := map[string][]model.PrerequisiteDefinition{}
-	for rows.Next() {
-		var courseCode string
-		var prerequisite model.PrerequisiteDefinition
-		var minimumGrade sql.NullString
-		if err := rows.Scan(&courseCode, &prerequisite.CourseCode, &minimumGrade, &prerequisite.IsCorequisite); err != nil {
-			return nil, err
-		}
-		prerequisite.MinimumGrade = nullableString(minimumGrade)
-		result[courseCode] = append(result[courseCode], prerequisite)
-	}
-
-	return result, rows.Err()
-}
-
-func nullableString(value sql.NullString) *string {
-	if !value.Valid {
+	if !exists || cached.definition == nil || time.Since(cached.fetchedAt) >= programCacheTTL {
 		return nil
 	}
-	result := value.String
-	return &result
+
+	return cached.definition
 }
 
-func nullStringOr(value sql.NullString, fallback string) string {
-	if !value.Valid || value.String == "" {
-		return fallback
+func (r *CatalogRepository) storeProgram(cacheKey string, definition *model.ProgramDefinition) {
+	r.cache.mu.Lock()
+	r.cache.programs[cacheKey] = cachedProgramDefinition{
+		definition: definition,
+		fetchedAt:  time.Now().UTC(),
 	}
-	return value.String
+	r.cache.mu.Unlock()
 }

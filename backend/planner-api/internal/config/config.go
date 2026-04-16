@@ -12,7 +12,7 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		Port:          getEnv("PLANAHEAD_PORT", "8080"),
+		Port:          getEnv("PLANAHEAD_PORT", "8000"),
 		DBDriver:      getEnv("PLANAHEAD_DB_DRIVER", "mysql"),
 		DBDSN:         getEnv("PLANAHEAD_DB_DSN", "root@tcp(127.0.0.1:3306)/degree_tracker?parseTime=true"),
 		AllowedOrigin: getEnv("PLANAHEAD_ALLOWED_ORIGIN", "http://localhost:3000"),

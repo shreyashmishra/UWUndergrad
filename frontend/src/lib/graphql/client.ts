@@ -3,13 +3,12 @@ import type {
   Program,
   Roadmap,
   StudentProgress,
-  University,
 } from "@/types/roadmap";
 
 const GRAPHQL_ENDPOINT =
   process.env.NEXT_PUBLIC_GO_GRAPHQL_API_URL ??
   process.env.NEXT_PUBLIC_GRAPHQL_API_URL ??
-  "http://localhost:8080/graphql";
+  "http://localhost:8000/graphql";
 
 async function graphqlRequest<TData>(
   query: string,
@@ -55,19 +54,6 @@ function toProgressInput(snapshot: ProgressSnapshot): Record<string, unknown> {
       courseCode,
     })),
   };
-}
-
-export async function fetchAvailableUniversities(): Promise<University[]> {
-  const data = await graphqlRequest<{ availableUniversities: University[] }>(`
-    query AvailableUniversities {
-      availableUniversities {
-        code
-        name
-      }
-    }
-  `);
-
-  return data.availableUniversities;
 }
 
 export async function fetchProgramsByUniversity(universityCode: string): Promise<Program[]> {
