@@ -53,9 +53,7 @@ export function ProgramSelector({
 
   const displayValue = open
     ? query
-    : selected
-      ? `${selected.code} – ${selected.name}`
-      : "";
+    : selected?.name ?? "";
 
   return (
     <div ref={containerRef} className="relative">
@@ -112,9 +110,7 @@ export function ProgramSelector({
                   selected?.code === p.code && "bg-mint/40",
                 )}
               >
-                <span className="text-sm font-semibold text-ink">
-                  {p.code} – {p.name}
-                </span>
+                <span className="text-sm font-semibold text-ink">{p.name}</span>
                 <span className="text-xs text-ink/50">{p.degree}</span>
               </button>
             </li>

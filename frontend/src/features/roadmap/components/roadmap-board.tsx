@@ -11,55 +11,38 @@ interface RoadmapBoardProps {
   onElectiveClear: (groupCode: string) => void;
 }
 
-// Assign short labels like "1A", "1B" based on ordering within each year.
-// Falls back to the backend label if no year data is present.
-function buildTermLabels(terms: TermRoadmap[]): Map<string, string> {
-  const labels = new Map<string, string>();
-  const sorted = [...terms].sort((a, b) => a.sequence - b.sequence);
-  const byYear = new Map<number, TermRoadmap[]>();
-
-  for (const t of sorted) {
-    const y = t.year > 0 ? t.year : 0;
-    const arr = byYear.get(y) ?? [];
-    arr.push(t);
-    byYear.set(y, arr);
-  }
-
-  for (const [year, yearTerms] of byYear) {
-    yearTerms.forEach((t, i) => {
-      const letter = String.fromCharCode(65 + i); // A, B, C …
-      labels.set(t.code, year > 0 ? `${year}${letter}` : t.label);
-    });
-  }
-
-  return labels;
+// Return the short display label for a term.
+// The backend now sets label = "1A", "2B", etc. for proper academic terms.
+// For requirement sections (year=0) we use the full label.
+function shortLabel(term: TermRoadmap): string {
+  return term.label;
 }
 
-// Group terms by year for display, preserving sequence order.
+// Build year-grouped buckets.
+// year=0  → requirement sections without a real term structure (e.g. CS "Required Courses")
+// year>0  → real academic terms (1A, 1B, 2A … 4B)
 function groupByYear(
   terms: TermRoadmap[],
-): { year: number | null; items: TermRoadmap[] }[] {
+): { year: number; label: string; items: TermRoadmap[] }[] {
   const sorted = [...terms].sort((a, b) => a.sequence - b.sequence);
-  const hasYears = sorted.some((t) => t.year > 0);
-
-  if (!hasYears) {
-    return [{ year: null, items: sorted }];
-  }
-
   const map = new Map<number, TermRoadmap[]>();
+
   for (const t of sorted) {
-    const y = t.year > 0 ? t.year : 0;
-    const arr = map.get(y) ?? [];
+    const arr = map.get(t.year) ?? [];
     arr.push(t);
-    map.set(y, arr);
+    map.set(t.year, arr);
   }
 
   return Array.from(map.entries())
     .sort(([a], [b]) => a - b)
-    .map(([year, items]) => ({ year, items }));
+    .map(([year, items]) => ({
+      year,
+      label: year === 0 ? "Requirements" : `Year ${year}`,
+      items,
+    }));
 }
 
-function termCompletion(term: TermRoadmap) {
+function termCompletion(term: TermRoadmap): number {
   return term.totalCount > 0 ? term.completedCount / term.totalCount : 0;
 }
 
@@ -98,172 +81,211 @@ export function RoadmapBoard({
   }
 
   const sorted = [...roadmap.terms].sort((a, b) => a.sequence - b.sequence);
-  const termLabels = buildTermLabels(sorted);
   const groups = groupByYear(sorted);
+
+  // Only real academic terms (year > 0) appear in the pathway strip.
+  const pathwayTerms = sorted.filter((t) => t.year > 0);
+  const hasPathway = pathwayTerms.length > 0;
 
   return (
     <section className="space-y-5">
-      {/* Pathway strip */}
-      <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
-        <p className="mb-4 text-xs font-semibold uppercase tracking-[0.24em] text-ink/50">
-          Academic Pathway
-        </p>
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-          {sorted.map((term, i) => {
-            const label = termLabels.get(term.code) ?? term.label;
-            const pct = termCompletion(term);
-            const isDone = pct >= 1;
-            const isActive = pct > 0 && pct < 1;
-
-            return (
-              <div key={term.code} className="flex flex-shrink-0 items-center gap-1.5">
-                <div
-                  className={cn(
-                    "flex min-w-[52px] flex-col items-center gap-1 rounded-xl px-3 py-2.5 text-center",
-                    isDone
-                      ? "bg-teal text-white"
-                      : isActive
-                        ? "bg-sand/80 text-amber"
-                        : "border border-ink/8 bg-cloud text-ink/50",
-                  )}
-                >
-                  <span className="text-xs font-bold tracking-wide">{label}</span>
-                  <span className="text-[10px] opacity-70">
-                    {term.completedCount}/{term.totalCount}
-                  </span>
-                </div>
-                {i < sorted.length - 1 && (
-                  <svg
-                    className="flex-shrink-0 text-ink/20"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 14 14"
-                    fill="none"
-                  >
-                    <path
-                      d="M3 7h8M8 4l3 3-3 3"
-                      stroke="currentColor"
-                      strokeWidth="1.4"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Terms grouped by year */}
-      {groups.map(({ year, items }) => (
-        <div key={year ?? "all"} className="space-y-3">
-          {year !== null && (
-            <div className="flex items-center gap-3">
-              <div className="rounded-full bg-ink px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                Year {year}
-              </div>
-              <div className="h-px flex-1 bg-ink/10" />
-            </div>
-          )}
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            {items.map((term) => {
-              const shortLabel = termLabels.get(term.code) ?? term.label;
+      {/* Pathway strip — only shown when the program has real term data */}
+      {hasPathway && (
+        <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
+          <p className="mb-4 text-xs font-semibold uppercase tracking-[0.24em] text-ink/50">
+            Academic Pathway
+          </p>
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            {pathwayTerms.map((term, i) => {
               const pct = termCompletion(term);
+              const isDone = pct >= 1;
+              const isActive = pct > 0 && pct < 1;
 
               return (
-                <article
-                  key={term.code}
-                  className="flex flex-col rounded-[1.7rem] border border-ink/8 bg-cloud p-5"
-                >
-                  {/* Term header */}
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-ink text-sm font-bold text-white">
-                        {shortLabel}
-                      </div>
-                      <div>
-                        <h3 className="font-display text-xl leading-tight text-ink">
-                          {term.label}
-                        </h3>
-                        {term.year > 0 && (
-                          <p className="mt-0.5 text-xs text-ink/50">
-                            {term.season === "FALL"
-                              ? "Fall"
-                              : term.season === "WINTER"
-                                ? "Winter"
-                                : "Spring"}{" "}
-                            · Year {term.year}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl bg-white px-3 py-2 text-right shadow-sm">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/40">
-                        Done
-                      </p>
-                      <p className="mt-0.5 font-display text-xl text-ink">
-                        {term.completedCount}/{term.totalCount}
-                      </p>
-                    </div>
+                <div key={term.code} className="flex flex-shrink-0 items-center gap-1.5">
+                  <div
+                    className={cn(
+                      "flex min-w-[52px] flex-col items-center gap-1 rounded-xl px-3 py-2.5 text-center",
+                      isDone
+                        ? "bg-teal text-white"
+                        : isActive
+                          ? "bg-sand/80 text-amber"
+                          : "border border-ink/8 bg-cloud text-ink/50",
+                    )}
+                  >
+                    <span className="text-xs font-bold tracking-wide">
+                      {shortLabel(term)}
+                    </span>
+                    <span className="text-[10px] opacity-70">
+                      {term.completedCount}/{term.totalCount}
+                    </span>
                   </div>
-
-                  {/* Term progress bar */}
-                  <div className="mb-4 h-1.5 overflow-hidden rounded-full bg-ink/8">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-teal to-amber transition-all duration-500"
-                      style={{ width: `${pct * 100}%` }}
-                    />
-                  </div>
-
-                  {/* Requirements */}
-                  <div className="space-y-3">
-                    {term.requirements.map((req) => {
-                      if (req.course) {
-                        return (
-                          <CourseCard
-                            key={`${term.code}-${req.course.code}`}
-                            course={req.course}
-                            variant="required"
-                            onStatusChange={(status) =>
-                              onCourseStatusChange(req.course!.code, status)
-                            }
-                          />
-                        );
-                      }
-
-                      if (req.group) {
-                        return (
-                          <ElectiveGroupCard
-                            key={`${term.code}-${req.group.code}`}
-                            group={req.group}
-                            onSelectOption={(courseCode) =>
-                              onElectiveSelect(req.group!.code, courseCode)
-                            }
-                            onOptionStatusChange={(courseCode, status) =>
-                              onElectiveStatusChange(
-                                req.group!.code,
-                                courseCode,
-                                status,
-                              )
-                            }
-                            onClearSelection={() =>
-                              onElectiveClear(req.group!.code)
-                            }
-                          />
-                        );
-                      }
-
-                      return null;
-                    })}
-                  </div>
-                </article>
+                  {i < pathwayTerms.length - 1 && (
+                    <svg
+                      className="flex-shrink-0 text-ink/20"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 14 14"
+                      fill="none"
+                    >
+                      <path
+                        d="M3 7h8M8 4l3 3-3 3"
+                        stroke="currentColor"
+                        strokeWidth="1.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </div>
               );
             })}
           </div>
         </div>
-      ))}
+      )}
+
+      {/* Terms grouped by year */}
+      {groups.map(({ year, label: groupLabel, items }) => {
+        // Skip groups with no requirements
+        if (items.every((t) => t.requirements.length === 0)) {
+          return null;
+        }
+
+        return (
+          <div key={year} className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div
+                className={cn(
+                  "rounded-full px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em]",
+                  year === 0
+                    ? "bg-ink/8 text-ink/60"
+                    : "bg-ink text-white",
+                )}
+              >
+                {groupLabel}
+              </div>
+              <div className="h-px flex-1 bg-ink/10" />
+            </div>
+
+            <div
+              className={cn(
+                "grid gap-4",
+                // Academic years: 2 terms side-by-side; plan notes: single column
+                year > 0 ? "xl:grid-cols-2" : "xl:grid-cols-1",
+              )}
+            >
+              {items.map((term) => {
+                const pct = termCompletion(term);
+                const isAcademic = term.year > 0;
+
+                return (
+                  <article
+                    key={term.code}
+                    className="flex flex-col rounded-[1.7rem] border border-ink/8 bg-cloud p-5"
+                  >
+                    {/* Term header */}
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        {isAcademic ? (
+                          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-ink text-sm font-bold text-white">
+                            {shortLabel(term)}
+                          </div>
+                        ) : (
+                          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-ink/8">
+                            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                              <path
+                                d="M3 5h12M3 9h8M3 13h10"
+                                stroke="#102336"
+                                strokeOpacity="0.4"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          </div>
+                        )}
+                        <div>
+                          <h3 className="font-display text-xl leading-tight text-ink">
+                            {isAcademic
+                              ? term.season === "FALL"
+                                ? `Fall · Year ${term.year}`
+                                : term.season === "WINTER"
+                                  ? `Winter · Year ${term.year}`
+                                  : `Spring · Year ${term.year}`
+                              : term.label}
+                          </h3>
+                        </div>
+                      </div>
+
+                      {term.totalCount > 0 && (
+                        <div className="rounded-2xl bg-white px-3 py-2 text-right shadow-sm">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/40">
+                            Done
+                          </p>
+                          <p className="mt-0.5 font-display text-xl text-ink">
+                            {term.completedCount}/{term.totalCount}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Progress bar */}
+                    {term.totalCount > 0 && (
+                      <div className="mb-4 h-1.5 overflow-hidden rounded-full bg-ink/8">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-teal to-amber transition-all duration-500"
+                          style={{ width: `${pct * 100}%` }}
+                        />
+                      </div>
+                    )}
+
+                    {/* Requirements */}
+                    <div className="space-y-3">
+                      {term.requirements.map((req) => {
+                        if (req.course) {
+                          return (
+                            <CourseCard
+                              key={`${term.code}-${req.course.code}`}
+                              course={req.course}
+                              variant="required"
+                              onStatusChange={(status) =>
+                                onCourseStatusChange(req.course!.code, status)
+                              }
+                            />
+                          );
+                        }
+
+                        if (req.group) {
+                          return (
+                            <ElectiveGroupCard
+                              key={`${term.code}-${req.group.code}`}
+                              group={req.group}
+                              onSelectOption={(courseCode) =>
+                                onElectiveSelect(req.group!.code, courseCode)
+                              }
+                              onOptionStatusChange={(courseCode, status) =>
+                                onElectiveStatusChange(
+                                  req.group!.code,
+                                  courseCode,
+                                  status,
+                                )
+                              }
+                              onClearSelection={() =>
+                                onElectiveClear(req.group!.code)
+                              }
+                            />
+                          );
+                        }
+
+                        return null;
+                      })}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }

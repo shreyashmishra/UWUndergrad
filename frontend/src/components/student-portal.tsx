@@ -267,8 +267,8 @@ export function StudentPortal() {
             {/* Sidebar */}
             <aside className="space-y-4">
 
-              {/* Program selector */}
-              <div className="rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
+              {/* Program selector — z-10 so its dropdown paints above the active plan card */}
+              <div className="relative z-10 rounded-[2rem] border border-white/70 bg-white/80 p-5 shadow-panel backdrop-blur">
                 <h1 className="mb-1 font-display text-2xl leading-tight text-ink">
                   Plan your degree
                 </h1>
@@ -291,9 +291,7 @@ export function StudentPortal() {
                     Active plan
                   </p>
                   <h2 className="mt-2 font-display text-2xl leading-tight text-ink">
-                    {selectedProgram
-                      ? `${selectedProgram.code} – ${selectedProgram.name}`
-                      : "Loading…"}
+                    {selectedProgram?.name ?? "Loading…"}
                   </h2>
                   {selectedProgram?.degree && (
                     <p className="mt-1.5 text-sm text-ink/60">{selectedProgram.degree}</p>
