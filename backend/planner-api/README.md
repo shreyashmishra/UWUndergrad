@@ -29,6 +29,8 @@ go run ./cmd/server
 - DSN: `root@tcp(127.0.0.1:3306)/degree_tracker?parseTime=true`
 - allowed origin: `http://localhost:3000`
 - mock user key: `local-demo-user`
+- rate limit: `10` requests per `1m` per client IP
+- rate limit cleanup window: `5m`
 
 ## Docker
 

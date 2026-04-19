@@ -13,6 +13,7 @@ import (
 	"planahead/planner-api/internal/config"
 	"planahead/planner-api/internal/db"
 	"planahead/planner-api/internal/graph"
+	"planahead/planner-api/internal/ratelimit"
 	"planahead/planner-api/internal/repository"
 	"planahead/planner-api/internal/service"
 	"planahead/planner-api/internal/waterloo"
@@ -46,6 +47,11 @@ func main() {
 
 	router := chi.NewRouter()
 	router.Use(graph.CORSMiddleware(cfg.AllowedOrigin))
+	router.Use(ratelimit.NewStore(ratelimit.Config{
+		RequestsPerWindow: cfg.RateLimitRequests,
+		Window:            cfg.RateLimitWindow,
+		CleanupInterval:   cfg.RateLimitCleanupWindow,
+	}).Middleware())
 	router.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("PlanAhead Go API"))
