@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"strings"
 	"time"
 
 	"planahead/planner-api/internal/model"
@@ -149,4 +151,42 @@ func (r *StudentRepository) ClearElectiveSelection(ctx context.Context, universi
 	}
 
 	return r.GetProgressSnapshot(ctx, universityCode, programCode, studentExternalKey)
+}
+
+type PlannerStudent struct {
+	ID           int64
+	ExternalKey  string
+	FullName     string
+	Email        string
+	PasswordHash string
+}
+
+func (r *StudentRepository) CreateStudent(ctx context.Context, externalKey, fullName, email, passwordHash string) (*PlannerStudent, error) {
+	result, err := r.db.ExecContext(ctx, "INSERT INTO planner_students (external_key, full_name, email, password_hash) VALUES (?, ?, ?, ?)", externalKey, fullName, email, passwordHash)
+	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") {
+			return nil, errors.New("An account with this email already exists")
+		}
+		return nil, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &PlannerStudent{
+		ID:           id,
+		ExternalKey:  externalKey,
+		FullName:     fullName,
+		Email:        email,
+		PasswordHash: passwordHash,
+	}, nil
+}
+
+func (r *StudentRepository) GetStudentByEmail(ctx context.Context, email string) (*PlannerStudent, error) {
+	row := r.db.QueryRowContext(ctx, "SELECT id, external_key, full_name, email, password_hash FROM planner_students WHERE email = ?", email)
+	var s PlannerStudent
+	if err := row.Scan(&s.ID, &s.ExternalKey, &s.FullName, &s.Email, &s.PasswordHash); err != nil {
+		return nil, err
+	}
+	return &s, nil
 }

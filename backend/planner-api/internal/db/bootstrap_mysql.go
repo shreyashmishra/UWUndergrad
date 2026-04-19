@@ -7,6 +7,14 @@ import (
 )
 
 const mysqlSchema = `
+CREATE TABLE IF NOT EXISTS planner_students (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    external_key VARCHAR(64) NOT NULL UNIQUE,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS universities (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     code VARCHAR(64) NOT NULL UNIQUE,

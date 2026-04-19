@@ -39,7 +39,8 @@ func main() {
 	studentRepository := repository.NewStudentRepository(sqlDB)
 	programService := service.NewProgramService(catalogRepository, studentRepository, cfg.MockUserID)
 	studentService := service.NewStudentService(studentRepository, cfg.MockUserID)
-	resolver := graph.NewRootResolver(programService, studentService)
+	authService := service.NewAuthService(studentRepository, "replace_this_secret_in_prod")
+	resolver := graph.NewRootResolver(programService, studentService, authService)
 
 	schema := graphql.MustParseSchema(graph.Schema, resolver)
 

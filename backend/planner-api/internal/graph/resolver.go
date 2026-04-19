@@ -10,12 +10,14 @@ import (
 type RootResolver struct {
 	programService *service.ProgramService
 	studentService *service.StudentService
+	authService    *service.AuthService
 }
 
-func NewRootResolver(programService *service.ProgramService, studentService *service.StudentService) *RootResolver {
+func NewRootResolver(programService *service.ProgramService, studentService *service.StudentService, authService *service.AuthService) *RootResolver {
 	return &RootResolver{
 		programService: programService,
 		studentService: studentService,
+		authService:    authService,
 	}
 }
 
@@ -127,6 +129,37 @@ func (r *RootResolver) ClearElectiveSelection(ctx context.Context, args struct {
 	}
 	return &studentProgressResolver{item: *progress}, nil
 }
+
+func (r *RootResolver) Register(ctx context.Context, args struct {
+	Email    string
+	FullName string
+	Password string
+}) (*authPayloadResolver, error) {
+	payload, err := r.authService.Register(ctx, args.Email, args.FullName, args.Password)
+	if err != nil {
+		return nil, err
+	}
+	return &authPayloadResolver{item: payload}, nil
+}
+
+func (r *RootResolver) Login(ctx context.Context, args struct {
+	Email    string
+	Password string
+}) (*authPayloadResolver, error) {
+	payload, err := r.authService.Login(ctx, args.Email, args.Password)
+	if err != nil {
+		return nil, err
+	}
+	return &authPayloadResolver{item: payload}, nil
+}
+
+type authPayloadResolver struct {
+	item *service.AuthPayload
+}
+
+func (r *authPayloadResolver) Token() string       { return r.item.Token }
+func (r *authPayloadResolver) StudentName() string { return r.item.StudentName }
+func (r *authPayloadResolver) ExternalKey() string { return r.item.ExternalKey }
 
 type progressInputResolverArgs struct {
 	CourseStatuses     *[]struct {

@@ -1,7 +1,8 @@
 import { cn } from "@/lib/utils/cn";
 import { CourseCard } from "@/features/roadmap/components/course-card";
 import { ElectiveGroupCard } from "@/features/roadmap/components/elective-group-card";
-import type { CourseStatus, Roadmap, TermRoadmap } from "@/types/roadmap";
+import type { CourseStatus, Roadmap, TermRoadmap, TermRequirement } from "@/types/roadmap";
+import { useState, useEffect } from "react";
 
 interface RoadmapBoardProps {
   roadmap: Roadmap | null;
@@ -9,6 +10,8 @@ interface RoadmapBoardProps {
   onElectiveSelect: (groupCode: string, courseCode: string) => void;
   onElectiveStatusChange: (groupCode: string, courseCode: string, status: CourseStatus) => void;
   onElectiveClear: (groupCode: string) => void;
+  currentUserKey: string | null;
+  isGuest?: boolean;
 }
 
 // Return the short display label for a term.
@@ -52,7 +55,22 @@ export function RoadmapBoard({
   onElectiveSelect,
   onElectiveStatusChange,
   onElectiveClear,
+  currentUserKey,
+  isGuest,
 }: RoadmapBoardProps) {
+  const [plannedTerms, setPlannedTerms] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && !isGuest && currentUserKey) {
+      const stored = localStorage.getItem(`plannedTerms_${currentUserKey}`);
+      if (stored) {
+        try {
+          setPlannedTerms(JSON.parse(stored));
+        } catch {}
+      }
+    }
+  }, [currentUserKey, isGuest]);
+
   if (!roadmap) {
     return (
       <section className="rounded-[2rem] border border-white/60 bg-white/80 p-12 text-center shadow-panel backdrop-blur">
@@ -80,8 +98,128 @@ export function RoadmapBoard({
     );
   }
 
-  const sorted = [...roadmap.terms].sort((a, b) => a.sequence - b.sequence);
+  // Synthesize standard 1A - 4B terms if they don't exist in the roadmap
+  const existingTermLabels = new Set(roadmap.terms.map(t => t.label));
+  const standardTermNames = [
+    { year: 1, term: "1A", season: "FALL", seq: 100 },
+    { year: 1, term: "1B", season: "WINTER", seq: 101 },
+    { year: 2, term: "2A", season: "FALL", seq: 200 },
+    { year: 2, term: "2B", season: "WINTER", seq: 201 },
+    { year: 3, term: "3A", season: "FALL", seq: 300 },
+    { year: 3, term: "3B", season: "WINTER", seq: 301 },
+    { year: 4, term: "4A", season: "FALL", seq: 400 },
+    { year: 4, term: "4B", season: "WINTER", seq: 401 }
+  ];
+
+  const synthesizedTerms: TermRoadmap[] = [];
+  standardTermNames.forEach(st => {
+    if (!existingTermLabels.has(st.term)) {
+      synthesizedTerms.push({
+        code: `term-${st.term.toLowerCase()}`,
+        label: st.term,
+        year: st.year,
+        season: st.season as any,
+        sequence: st.seq,
+        completedCount: 0,
+        totalCount: 0,
+        requirements: []
+      });
+    }
+  });
+
+  // Intercept the roadmap terms and move courses based on plannedTerms
+  // 1. Gather all unique requirements from all initial terms
+  const allInitialRequirements: TermRequirement[] = [];
+  const sourceTermMap = new Map<string, string>(); // courseCode -> originalTermCode
+
+  [...roadmap.terms].forEach(term => {
+    term.requirements.forEach(req => {
+      const code = req.course?.code || req.group?.code;
+      if (code) {
+        allInitialRequirements.push(req);
+        sourceTermMap.set(code, term.code);
+      }
+    });
+  });
+
+  // 2. Map requirements to their final terms (either user-planned or original)
+  const finalTerms = [...roadmap.terms, ...synthesizedTerms].map(t => ({ ...t, requirements: [] as TermRequirement[] }));
+  
+  allInitialRequirements.forEach(req => {
+    const code = req.course?.code || req.group?.code;
+    if (!code) return;
+
+    const plannedTermCode = plannedTerms[code];
+    const originalTermCode = sourceTermMap.get(code);
+
+    // Try to find planned term first, then fall back to original
+    let targetTerm = finalTerms.find(t => t.code === plannedTermCode);
+    if (!targetTerm && originalTermCode) {
+      targetTerm = finalTerms.find(t => t.code === originalTermCode);
+    }
+
+    if (targetTerm) {
+      targetTerm.requirements.push(req);
+    }
+  });
+
+  const sorted = finalTerms.sort((a, b) => a.sequence - b.sequence);
   const groups = groupByYear(sorted);
+
+  const handleDragStart = (e: React.DragEvent, courseCode: string) => {
+    e.dataTransfer.setData("courseCode", courseCode);
+    e.dataTransfer.effectAllowed = "move";
+    // Using a timeout to prevent the original element from disappearing before the drag image is created
+    const target = e.currentTarget;
+    setTimeout(() => {
+      target.classList.add("opacity-50");
+      target.classList.add("scale-95");
+    }, 0);
+  };
+
+  const handleDragEnd = (e: React.DragEvent) => {
+    e.currentTarget.classList.remove("opacity-50");
+    e.currentTarget.classList.remove("scale-95");
+  };
+
+  const handleDrop = (e: React.DragEvent, termCode: string) => {
+    e.preventDefault();
+    e.currentTarget.classList.remove("bg-white/40", "border-teal/50");
+    const courseCode = e.dataTransfer.getData("courseCode");
+    if (courseCode) {
+      setPlannedTerms(prev => {
+        const next = { ...prev, [courseCode]: termCode };
+        if (typeof window !== "undefined" && !isGuest && currentUserKey) {
+          localStorage.setItem(`plannedTerms_${currentUserKey}`, JSON.stringify(next));
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.currentTarget.classList.add("bg-white/40", "border-teal/50");
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.currentTarget.classList.remove("bg-white/40", "border-teal/50");
+  };
+
+  const clearTermPlan = (courseCode: string) => {
+    setPlannedTerms(prev => {
+      const next = { ...prev };
+      delete next[courseCode];
+      if (typeof window !== "undefined" && !isGuest && currentUserKey) {
+        localStorage.setItem(`plannedTerms_${currentUserKey}`, JSON.stringify(next));
+      }
+      return next;
+    });
+  };
 
   // Only real academic terms (year > 0) appear in the pathway strip.
   const pathwayTerms = sorted.filter((t) => t.year > 0);
@@ -146,8 +284,8 @@ export function RoadmapBoard({
 
       {/* Terms grouped by year */}
       {groups.map(({ year, label: groupLabel, items }) => {
-        // Skip groups with no requirements
-        if (items.every((t) => t.requirements.length === 0)) {
+        // Only skip Year 0 (Requirements) if it's completely empty. Real academic years (1-4) should ALWAYS show.
+        if (year === 0 && items.every((t) => t.requirements.length === 0)) {
           return null;
         }
 
@@ -181,7 +319,11 @@ export function RoadmapBoard({
                 return (
                   <article
                     key={term.code}
-                    className="flex flex-col rounded-[1.7rem] border border-ink/8 bg-cloud p-5"
+                    onDrop={(e) => handleDrop(e, term.code)}
+                    onDragOver={handleDragOver}
+                    onDragEnter={handleDragEnter}
+                    onDragLeave={handleDragLeave}
+                    className="flex flex-col rounded-[1.7rem] border border-ink/8 bg-cloud p-5 transition-colors"
                   >
                     {/* Term header */}
                     <div className="mb-4 flex items-center justify-between gap-3">
@@ -239,40 +381,74 @@ export function RoadmapBoard({
                     )}
 
                     {/* Requirements */}
-                    <div className="space-y-3">
+                    <div className="space-y-3 min-h-[50px] rounded-xl">
                       {term.requirements.map((req) => {
                         if (req.course) {
+                          const isMoved = !!plannedTerms[req.course.code];
                           return (
-                            <CourseCard
+                            <div
                               key={`${term.code}-${req.course.code}`}
-                              course={req.course}
-                              variant="required"
-                              onStatusChange={(status) =>
-                                onCourseStatusChange(req.course!.code, status)
-                              }
-                            />
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, req.course!.code)}
+                              onDragEnd={(e) => e.currentTarget.classList.remove("opacity-50")}
+                              className="cursor-move relative"
+                            >
+                              <CourseCard
+                                course={req.course}
+                                variant="required"
+                                onStatusChange={(status) =>
+                                  onCourseStatusChange(req.course!.code, status)
+                                }
+                              />
+                              {isMoved && (
+                                <button
+                                  onClick={() => clearTermPlan(req.course!.code)}
+                                  className="absolute right-2 top-2 rounded-full bg-rose/10 p-1 text-rose transition hover:bg-rose/20 text-xs shadow-sm"
+                                  title="Reset to default term"
+                                >
+                                  Reset
+                                </button>
+                              )}
+                            </div>
                           );
                         }
 
                         if (req.group) {
+                          const isMoved = !!plannedTerms[req.group.code];
                           return (
-                            <ElectiveGroupCard
+                            <div
                               key={`${term.code}-${req.group.code}`}
-                              group={req.group}
-                              onSelectOption={(courseCode) =>
-                                onElectiveSelect(req.group!.code, courseCode)
-                              }
-                              onOptionStatusChange={(courseCode, status) =>
-                                onElectiveStatusChange(
-                                  req.group!.code,
-                                  courseCode,
-                                  status,
-                                )
-                              }
-                              onClearSelection={() =>
-                                onElectiveClear(req.group!.code)
-                              }
-                            />
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, req.group!.code)}
+                              onDragEnd={(e) => e.currentTarget.classList.remove("opacity-50")}
+                              className="cursor-move relative"
+                            >
+                              <ElectiveGroupCard
+                                group={req.group}
+                                onSelectOption={(courseCode) =>
+                                  onElectiveSelect(req.group!.code, courseCode)
+                                }
+                                onOptionStatusChange={(courseCode, status) =>
+                                  onElectiveStatusChange(
+                                    req.group!.code,
+                                    courseCode,
+                                    status,
+                                  )
+                                }
+                                onClearSelection={() =>
+                                  onElectiveClear(req.group!.code)
+                                }
+                              />
+                               {isMoved && (
+                                <button
+                                  onClick={() => clearTermPlan(req.group!.code)}
+                                  className="absolute right-2 top-2 rounded-full bg-rose/10 p-1 text-rose transition hover:bg-rose/20 text-xs shadow-sm z-10"
+                                  title="Reset to default term"
+                                >
+                                  Reset
+                                </button>
+                              )}
+                            </div>
                           );
                         }
 

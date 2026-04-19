@@ -18,6 +18,15 @@ type Mutation {
 	updateCourseStatus(input: UpdateCourseStatusInput!): StudentProgress!
 	selectElective(input: SelectElectiveInput!): StudentProgress!
 	clearElectiveSelection(input: ClearElectiveSelectionInput!): StudentProgress!
+
+	register(email: String!, fullName: String!, password: String!): AuthPayload!
+	login(email: String!, password: String!): AuthPayload!
+}
+
+type AuthPayload {
+	token: String!
+	studentName: String!
+	externalKey: String!
 }
 
 type University {

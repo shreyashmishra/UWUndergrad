@@ -20,7 +20,7 @@ export function ProgressSummary({ summary }: ProgressSummaryProps) {
             Requirement Summary
           </p>
           <h2 className="mt-2 font-display text-3xl text-ink">
-            {summary ? `${summary.completionPercentage}% complete` : "Waiting for roadmap"}
+            {summary ? `${Math.round(summary.completionPercentage)}% complete` : "Waiting for roadmap"}
           </h2>
         </div>
         <div className="rounded-full bg-ink px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white">

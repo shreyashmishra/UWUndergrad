@@ -14,11 +14,17 @@ async function graphqlRequest<TData>(
   query: string,
   variables?: Record<string, unknown>,
 ): Promise<TData> {
+	const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (token) {
+		headers["Authorization"] = `Bearer ${token}`;
+	}
+
   const response = await fetch(GRAPHQL_ENDPOINT, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
   });
@@ -172,10 +178,11 @@ export async function fetchStudentProgress(
   universityCode: string,
   programCode: string,
 ): Promise<StudentProgress> {
+  const studentExternalKey = typeof window !== "undefined" ? localStorage.getItem("externalKey") : null;
   const data = await graphqlRequest<{ studentProgress: StudentProgress }>(
     `
-      query StudentProgress($universityCode: String!, $programCode: String!) {
-        studentProgress(universityCode: $universityCode, programCode: $programCode) {
+      query StudentProgress($universityCode: String!, $programCode: String!, $studentExternalKey: String) {
+        studentProgress(universityCode: $universityCode, programCode: $programCode, studentExternalKey: $studentExternalKey) {
           studentExternalKey
           courseStatuses {
             courseCode
@@ -188,7 +195,7 @@ export async function fetchStudentProgress(
         }
       }
     `,
-    { universityCode, programCode },
+    { universityCode, programCode, studentExternalKey },
   );
 
   return data.studentProgress;
@@ -222,6 +229,7 @@ export async function updateCourseStatus(
         programCode,
         courseCode,
         status,
+        studentExternalKey: typeof window !== "undefined" ? localStorage.getItem("externalKey") : null,
       },
     },
   );
@@ -257,6 +265,7 @@ export async function selectElective(
         programCode,
         groupCode,
         courseCode,
+        studentExternalKey: typeof window !== "undefined" ? localStorage.getItem("externalKey") : null,
       },
     },
   );
@@ -290,9 +299,42 @@ export async function clearElectiveSelection(
         universityCode,
         programCode,
         groupCode,
+        studentExternalKey: typeof window !== "undefined" ? localStorage.getItem("externalKey") : null,
       },
     },
   );
 
   return data.clearElectiveSelection;
+}
+
+export async function login(email: string, password: string) {
+  const data = await graphqlRequest<{ login: { token: string, externalKey: string, studentName: string } }>(
+    `
+      mutation Login($email: String!, $password: String!) {
+        login(email: $email, password: $password) {
+          token
+          externalKey
+          studentName
+        }
+      }
+    `,
+    { email, password }
+  );
+  return data.login;
+}
+
+export async function register(email: string, fullName: string, password: string) {
+  const data = await graphqlRequest<{ register: { token: string, externalKey: string, studentName: string } }>(
+    `
+      mutation Register($email: String!, $fullName: String!, $password: String!) {
+        register(email: $email, fullName: $fullName, password: $password) {
+          token
+          externalKey
+          studentName
+        }
+      }
+    `,
+    { email, fullName, password }
+  );
+  return data.register;
 }
